@@ -1,6 +1,6 @@
-# Realtime wifi % busy graph
+# Realtime wifi % busy graph for OpenWRT
 
-This measures each channel's usage, including from other APs on the same channel.
+This measures each wifi channel's usage, including from other APs on the same channel.
 
 <img src="wifibusy-screenshot.png">
 
