@@ -1,0 +1,273 @@
+<%#
+ Copyright 2010 Jo-Philipp Wich <jow@openwrt.org>
+ Licensed to the public under the Apache License 2.0.
+-%>
+
+<%-
+	local ntm = require "luci.model.network".init()
+
+	local dev
+	local devices = { }
+	for _, dev in luci.util.vspairs(luci.sys.net.devices()) do
+		if dev:match("^wlan%d$") then
+			devices[#devices+1] = dev
+		end
+	end
+
+	local curdev = luci.http.formvalue("dev") or devices[1]
+-%>
+
+<%+header%>
+
+<script type="text/javascript" src="<%=resource%>/cbi.js?v=git-18.145.30016-526a876"></script>
+<script type="text/javascript">//<![CDATA[
+	var bwxhr = new XHR();
+
+	var G;
+	var TIME = 0;
+	var BUSY  = 1;
+	var LOCALBUSY = 2;
+
+	var width  = 760;
+	var height = 300;
+	var step   = 5;
+
+	var data_wanted = Math.floor(width / step);
+	var data_fill   = 0;
+	var data_stamp  = 0;
+
+	var data_busy = [ ];
+	var data_local_busy = [ ];
+
+	var line_busy;
+	var line_local_busy;
+
+	var label_25;
+	var label_50;
+	var label_75;
+
+	var label_busy_cur;
+	var label_busy_avg;
+	var label_busy_peak;
+
+	var label_local_busy_cur;
+	var label_local_busy_avg;
+	var label_local_busy_peak;
+
+	var label_scale;
+
+
+	function wifibusy_label(busy, br)
+	{
+		return String.format("%d %% %s",
+			busy, br ? '<br />' : ' '
+		);
+	}
+
+	/* wait for SVG */
+	window.setTimeout(
+		function() {
+			var svg = document.getElementById('busysvg');
+
+			try {
+				G = svg.getSVGDocument
+					? svg.getSVGDocument() : svg.contentDocument;
+			}
+			catch(e) {
+				G = document.embeds['busysvg'].getSVGDocument();
+			}
+
+			if (!G)
+			{
+				window.setTimeout(arguments.callee, 1000);
+			}
+			else
+			{
+				/* find sizes */
+				width       = svg.offsetWidth  - 2;
+				height      = svg.offsetHeight - 2;
+				data_wanted = Math.ceil(width / step);
+
+				/* prefill datasets */
+				for (var i = 0; i < data_wanted; i++)
+				{
+					data_busy[i] = 0;
+					data_local_busy[i] = 0;
+				}
+
+				/* find svg elements */
+				line_busy = G.getElementById('busy');
+				line_local_busy = G.getElementById('localbusy');
+
+				label_25 = G.getElementById('label_25');
+				label_50 = G.getElementById('label_50');
+				label_75 = G.getElementById('label_75');
+
+				label_busy_cur  = document.getElementById('busy_cur');
+				label_busy_avg  = document.getElementById('busy_avg');
+				label_busy_peak = document.getElementById('busy_peak');
+
+				label_local_busy_cur  = document.getElementById('local_busy_cur');
+				label_local_busy_avg  = document.getElementById('local_busy_avg');
+				label_local_busy_peak = document.getElementById('local_busy_peak');
+
+				label_scale   = document.getElementById('scale');
+
+
+				/* plot horizontal time interval lines */
+				for (var i = width % (step * 60); i < width; i += step * 60)
+				{
+					var line = G.createElementNS('http://www.w3.org/2000/svg', 'line');
+						line.setAttribute('x1', i);
+						line.setAttribute('y1', 0);
+						line.setAttribute('x2', i);
+						line.setAttribute('y2', '100%');
+						line.setAttribute('style', 'stroke:black;stroke-width:0.1');
+
+					var text = G.createElementNS('http://www.w3.org/2000/svg', 'text');
+						text.setAttribute('x', i + 5);
+						text.setAttribute('y', 15);
+						text.setAttribute('style', 'fill:#999999; font-size:9pt');
+						text.appendChild(G.createTextNode(Math.round((width - i) / step / 60) + 'm'));
+
+					label_25.parentNode.appendChild(line);
+					label_25.parentNode.appendChild(text);
+				}
+
+				label_scale.innerHTML = String.format('<%:(%d minute window, %d second interval)%>', data_wanted / 60, 3);
+
+				/* render datasets, start update interval */
+				XHR.poll(3, '<%=build_url("admin/status/realtime/wifibusy_status", curdev)%>', null,
+					function(x, data)
+					{
+						var data_max   = 0;
+						var data_scale = 0;
+
+						var data_busy_avg = 0;
+						var data_local_busy_avg = 0;
+
+						var data_busy_peak = 0;
+						var data_local_busy_peak = 0;
+
+						for (var i = data_stamp ? 0 : 1; i < data.length; i++)
+						{
+							/* skip overlapping entries */
+							if (data[i][TIME] <= data_stamp)
+								continue;
+
+							if (i > 0)
+							{
+								data_busy.push(data[i][BUSY]);
+								data_local_busy.push(data[i][LOCALBUSY]);
+							}
+						}
+
+						/* cut off outdated entries */
+						data_busy = data_busy.slice(data_busy.length - data_wanted, data_busy.length);
+						data_local_busy = data_local_busy.slice(data_local_busy.length - data_wanted, data_local_busy.length);
+
+						/* find peak */
+						for (var i = 0; i < data_busy.length; i++)
+						{
+							data_max = Math.max(data_max, data_busy[i]);
+							data_max = Math.max(data_max, data_local_busy[i]);
+
+							data_busy_peak = Math.max(data_busy_peak, data_busy[i]);
+							data_local_busy_peak = Math.max(data_local_busy_peak, data_local_busy[i]);
+
+							if (i > 0)
+							{
+								data_busy_avg = (data_busy_avg + data_busy[i]) / 2;
+								data_local_busy_avg = (data_local_busy_avg + data_local_busy[i]) / 2;
+							}
+							else
+							{
+								data_busy_avg = data_busy[i];
+								data_local_busy_avg = data_local_busy[i];
+							}
+						}
+
+						/* remember current timestamp, calculate horizontal scale */
+						data_stamp = data[data.length-1][TIME];
+						data_scale = height / (data_max * 1.1);
+
+
+						/* plot data */
+						var pt_busy = '0,' + height;
+						var pt_local_busy = '0,' + height;
+
+						var y_busy = 0;
+						var y_local_busy = 0;
+
+						for (var i = 0; i < data_busy.length; i++)
+						{
+							var x = i * step;
+
+							y_busy = height - Math.floor(data_busy[i] * data_scale);
+							y_local_busy = height - Math.floor(data_local_busy[i] * data_scale);
+
+							pt_busy += ' ' + x + ',' + y_busy;
+							pt_local_busy += ' ' + x + ',' + y_local_busy;
+						}
+
+						pt_busy += ' ' + width + ',' + y_busy + ' ' + width + ',' + height;
+						pt_local_busy += ' ' + width + ',' + y_local_busy + ' ' + width + ',' + height;
+
+						line_busy.setAttribute('points', pt_busy);
+						line_local_busy.setAttribute('points', pt_local_busy);
+
+						label_25.firstChild.data = wifibusy_label(1.1 * 0.25 * data_max);
+						label_50.firstChild.data = wifibusy_label(1.1 * 0.50 * data_max);
+						label_75.firstChild.data = wifibusy_label(1.1 * 0.75 * data_max);
+
+						label_busy_cur.innerHTML = wifibusy_label(data_busy[data_busy.length-1], true);
+						label_local_busy_cur.innerHTML = wifibusy_label(data_local_busy[data_local_busy.length-1], true);
+
+						label_busy_avg.innerHTML = wifibusy_label(data_busy_avg, true);
+						label_local_busy_avg.innerHTML = wifibusy_label(data_local_busy_avg, true);
+
+						label_busy_peak.innerHTML = wifibusy_label(data_busy_peak, true);
+						label_local_busy_peak.innerHTML = wifibusy_label(data_local_busy_peak, true);
+					}
+				);
+			}
+		}, 1000
+	);
+//]]></script>
+
+<h2 name="content"><%:WiFi Channel Busy%></h2>
+
+<ul class="cbi-tabmenu">
+	<% for _, dev in ipairs(devices) do %>
+		<li class="cbi-tab<%= dev == curdev and "" or "-disabled" %>"><a href="?dev=<%=pcdata(dev)%>"><%=pcdata(dev)%></a></li>
+	<% end %>
+</ul>
+
+<embed id="busysvg" style="width:100%; height:300px; border:1px solid #000000; background-color:#FFFFFF" src="<%=resource%>/wifibusy.svg" />
+<div style="text-align:right"><small id="scale">-</small></div>
+<br />
+
+<table style="width:100%; table-layout:fixed" cellspacing="5">
+	<tr>
+		<td style="text-align:right; vertical-align:top"><strong style="border-bottom:2px solid blue"><%:Channel:%></strong></td>
+		<td id="busy_cur">0 %</td>
+
+		<td style="text-align:right; vertical-align:top"><strong><%:Average:%></strong></td>
+		<td id="busy_avg">0 %</td>
+
+		<td style="text-align:right; vertical-align:top"><strong><%:Peak:%></strong></td>
+		<td id="busy_peak">0 %</td>
+	</tr>
+	<tr>
+		<td style="text-align:right; vertical-align:top"><strong style="border-bottom:2px solid green"><%:Transmit:%></strong></td>
+		<td id="local_busy_cur">0 %</td>
+
+		<td style="text-align:right; vertical-align:top"><strong><%:Average:%></strong></td>
+		<td id="local_busy_avg">0 %</td>
+
+		<td style="text-align:right; vertical-align:top"><strong><%:Peak:%></strong></td>
+		<td id="local_busy_peak">0 %</td>
+	</tr>
+</table>
+
+<%+footer%>

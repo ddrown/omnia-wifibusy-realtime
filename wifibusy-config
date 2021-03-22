@@ -1,0 +1,9 @@
+# this is /etc/config/wifibusy
+config interface wlan0
+        option inttype 'ath10k'
+        option phy 'phy0'
+        option interface 'wlan0'
+
+config interface wlan1
+        option inttype 'ath9k'
+        option interface 'wlan1'

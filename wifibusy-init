@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+
+START=98
+
+USE_PROCD=1
+NAME=wifibusy
+PROG=/usr/sbin/wifibusy
+
+start_service() {
+	mkdir -p /tmp/lib/wifibusy
+        procd_open_instance
+        procd_set_param command "$PROG"
+        procd_close_instance
+}
+
+stop() {
+        service_stop /usr/sbin/wifibusy
+}
+
+reload() {
+        service_reload /usr/sbin/wifibusy
+}
